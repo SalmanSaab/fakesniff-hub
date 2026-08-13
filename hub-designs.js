@@ -72,19 +72,37 @@ export function mount(root, ctx) {
   $("#dg-download").addEventListener("click", download);
   $("#dg-pick").addEventListener("click", toggleIdeas);
 
-  /* If someone pressed "Open in Designs" on an idea, it is waiting for us. */
-  try {
-    const seed = JSON.parse(sessionStorage.getItem("fakesniff-design-seed") || "null");
-    if (seed?.line) {
+  /* If someone pressed "Open in Designs" on an idea, it is waiting for us.
+   *
+   * Claude — 2026-08-13: this used to run only at mount. The Hub keeps a
+   * section mounted once you have visited it, so arriving from the Idea Lab a
+   * second time did nothing — the idea sat in storage until a reload happened
+   * to remount the module. Salman saw exactly that: press the button, land on
+   * Designs, refresh, and only then find the idea. It now also runs whenever
+   * this section becomes the visible one. */
+  function takeSeed() {
+    try {
+      const seed = JSON.parse(sessionStorage.getItem("fakesniff-design-seed") || "null");
+      if (!seed?.line) return;
       $("#dg-idea").value = seed.concept
         ? `the words "${seed.line}" set as the print, in the spirit of: ${seed.concept}`
         : `the words "${seed.line}" set as the print`;
       sessionStorage.removeItem("fakesniff-design-seed");
       note("Taken from the Idea Lab. Edit it however you like before generating.");
-    }
-  } catch { /* nothing waiting */ }
+      $("#dg-idea").focus();
+    } catch { /* nothing waiting */ }
+  }
+  takeSeed();
+  const onHash = () => {
+    if ((location.hash || "").replace(/^#/, "") === "designs") takeSeed();
+  };
+  window.addEventListener("hashchange", onHash);
 
-  return () => { root.innerHTML = ""; root.classList.remove("dg", "fs-scope"); };
+  return () => {
+    window.removeEventListener("hashchange", onHash);
+    root.innerHTML = "";
+    root.classList.remove("dg", "fs-scope");
+  };
 
   async function generate(event) {
     event?.preventDefault?.();
@@ -155,6 +173,14 @@ export function mount(root, ctx) {
       const rows = await res.json();
       if (!Array.isArray(rows) || !rows.length) { box.textContent = "The Idea Lab is empty."; return; }
 
+      /* 27 ideas today and it only grows. Scrolling a list to find one you
+         already have in mind is the thing that makes people stop using it. */
+      const search = document.createElement("input");
+      search.type = "search";
+      search.className = "dg-ideasearch";
+      search.placeholder = "Search the board";
+      search.setAttribute("aria-label", "Search ideas");
+
       const buttons = rows.map((r) => {
         const b = document.createElement("button");
         b.type = "button";
@@ -178,7 +204,31 @@ export function mount(root, ctx) {
         });
         return b;
       });
-      box.replaceChildren(...buttons);
+      const list = document.createElement("div");
+      list.className = "dg-idealist";
+      list.append(...buttons);
+
+      search.addEventListener("input", () => {
+        const q = search.value.trim().toLowerCase();
+        let shown = 0;
+        buttons.forEach((b, i) => {
+          const r = rows[i];
+          const hit = !q
+            || String(r.line || "").toLowerCase().includes(q)
+            || String(r.concept || "").toLowerCase().includes(q);
+          b.hidden = !hit;
+          if (hit) shown++;
+        });
+        empty.hidden = shown > 0;
+      });
+
+      const empty = document.createElement("p");
+      empty.className = "dg-ideanone";
+      empty.textContent = "Nothing on the board matches that.";
+      empty.hidden = true;
+
+      box.replaceChildren(search, list, empty);
+      search.focus();
     } catch (e) {
       box.textContent = `Could not read the board: ${String(e?.message || e).slice(0, 120)}`;
     }
